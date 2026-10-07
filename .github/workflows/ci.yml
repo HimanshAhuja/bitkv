@@ -180,6 +180,7 @@ jobs:
         run: |
           check() {
             until kubectl -n bitkv get pod bitkv-0 >/dev/null 2>&1; do sleep 1; done
+            kubectl -n bitkv wait pod/bitkv-0 --for=condition=Ready --timeout=120s
             kubectl -n bitkv port-forward svc/bitkv 6380 9121 >/dev/null 2>&1 &
             PF=$!
             sleep 3
