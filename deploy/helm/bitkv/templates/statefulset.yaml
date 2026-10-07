@@ -1,0 +1,135 @@
+{{- if ne (int .Values.replicaCount) 1 }}
+{{- fail "bitkv is single-node: replicaCount must be 1. Two pods would contend for one data directory." }}
+{{- end }}
+# StatefulSet rather than Deployment: the pod gets a stable name (bitkv-0),
+# a stable DNS record through the headless Service, and its own
+# PersistentVolumeClaim that is re-attached when the pod is rescheduled.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "bitkv.fullname" . }}
+  labels:
+    {{- include "bitkv.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  serviceName: {{ include "bitkv.fullname" . }}-headless
+  # Never run old and new pods side by side on the same volume.
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "bitkv.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "bitkv.selectorLabels" . | nindent 8 }}
+      {{- if .Values.metrics.podAnnotations }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.server.metricsPort | quote }}
+        prometheus.io/path: /metrics
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      automountServiceAccountToken: false   # the server never calls the Kubernetes API
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: bitkv
+          image: {{ include "bitkv.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --dir
+            - /data
+            - --port
+            - {{ .Values.server.port | quote }}
+            - --metrics-port
+            - {{ .Values.server.metricsPort | quote }}
+            - --sync
+            - {{ .Values.server.syncMode | quote }}
+            - --max-file-size
+            - {{ .Values.server.maxFileSizeBytes | int64 | quote }}
+          env:
+            # Used by bitkvctl when it runs as the readiness probe.
+            - name: BITKV_ADDR
+              value: "127.0.0.1:{{ .Values.server.port }}"
+            - name: BITKV_METRICS
+              value: "http://127.0.0.1:{{ .Values.server.metricsPort }}"
+          ports:
+            - name: resp
+              containerPort: {{ .Values.server.port }}
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.server.metricsPort }}
+              protocol: TCP
+          # Startup: recovery replays every data file, which takes longer on
+          # big datasets. Liveness and readiness wait until this passes, so a
+          # slow recovery is not mistaken for a hang and killed mid-way.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: 2
+            failureThreshold: 150
+          # Liveness: is the event loop responsive at all?
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # Readiness: does it actually serve requests? bitkvctl checks both
+          # a RESP PING and /readyz, so a wedged data path is caught even when
+          # the HTTP side still answers.
+          readinessProbe:
+            exec:
+              command: ["bitkvctl", "--timeout", "2s", "health"]
+            periodSeconds: 5
+            timeoutSeconds: 4
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if not .Values.persistence.enabled }}
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- end }}
+  {{- if .Values.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "bitkv.selectorLabels" . | nindent 10 }}
+      spec:
+        accessModes:
+          {{- toYaml .Values.persistence.accessModes | nindent 10 }}
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}
+  {{- end }}

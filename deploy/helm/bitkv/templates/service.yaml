@@ -1,0 +1,37 @@
+# Client-facing Service: stable virtual IP and DNS name
+#   <release>-bitkv.<namespace>.svc.cluster.local:6380
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "bitkv.fullname" . }}
+  labels:
+    {{- include "bitkv.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "bitkv.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: resp
+      port: {{ .Values.server.port }}
+      targetPort: resp
+    - name: metrics
+      port: {{ .Values.server.metricsPort }}
+      targetPort: metrics
+---
+# Headless Service (clusterIP: None) required by the StatefulSet. It gives the
+# pod its own DNS A record: <pod>.<release>-bitkv-headless.<ns>.svc.cluster.local
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "bitkv.fullname" . }}-headless
+  labels:
+    {{- include "bitkv.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "bitkv.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: resp
+      port: {{ .Values.server.port }}
+      targetPort: resp

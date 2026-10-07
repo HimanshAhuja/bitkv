@@ -1,0 +1,36 @@
+# `helm test <release>`: from a separate pod, check the Service resolves via
+# cluster DNS and the server answers over the network.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "bitkv.fullname" . }}-test
+  labels:
+    {{- include "bitkv.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: health
+      image: {{ include "bitkv.image" . | quote }}
+      command: ["bitkvctl"]
+      args:
+        - --addr
+        - "{{ include "bitkv.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.server.port }}"
+        - --metrics
+        - "http://{{ include "bitkv.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.server.metricsPort }}"
+        - --timeout
+        - 5s
+        - health
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]

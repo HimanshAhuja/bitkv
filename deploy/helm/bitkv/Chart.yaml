@@ -1,0 +1,10 @@
+apiVersion: v2
+name: bitkv
+description: Crash-safe key-value store with a Redis-compatible interface
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords: [database, key-value, storage, redis]
+home: https://github.com/HimanshAhuja/bitkv
+maintainers:
+  - name: Himansh Ahuja

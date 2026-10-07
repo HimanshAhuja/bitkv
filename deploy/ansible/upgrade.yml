@@ -1,0 +1,22 @@
+# Rolling upgrade, one host at a time.
+#   ansible-playbook upgrade.yml -e bitkv_version=<git ref>
+#
+# serial: 1 upgrades a single host per batch; max_fail_percentage: 0 stops the
+# whole rollout as soon as any host fails, so one bad build cannot take down
+# every instance.
+- name: Rolling upgrade of bitkv
+  hosts: bitkv
+  become: true
+  serial: 1
+  max_fail_percentage: 0
+  pre_tasks:
+    - name: Back up before touching the host
+      ansible.builtin.command:
+        cmd: >-
+          python3 {{ bitkv_home }}/ops/backup.py backup
+          --addr 127.0.0.1:{{ bitkv_port }}
+          --data-dir {{ bitkv_data_dir }}
+          --out /var/backups/bitkv-{{ ansible_date_time.iso8601_basic_short }}.tar.gz
+      changed_when: true
+  roles:
+    - bitkv

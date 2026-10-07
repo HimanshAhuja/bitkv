@@ -1,0 +1,61 @@
+# Unit tests for the alert rules:  promtool test rules alerts_test.yml
+rule_files:
+  - alerts.yml
+evaluation_interval: 1m
+
+tests:
+  - name: BitkvDown fires after 1 minute of failed scrapes, not before
+    interval: 1m
+    input_series:
+      - series: 'up{job="bitkv", instance="bitkv:9121"}'
+        values: "1 1 0 0 0"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: BitkvDown
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: BitkvDown
+        exp_alerts:
+          - exp_labels: {severity: critical, job: bitkv, instance: "bitkv:9121"}
+            exp_annotations:
+              summary: "bitkv bitkv:9121 is down"
+              description: "Prometheus has failed to scrape bitkv:9121 for 1 minute."
+              runbook_url: https://github.com/HimanshAhuja/bitkv/blob/main/docs/runbooks/server-unreachable.md
+
+  - name: space amplification must stay high for 30 minutes
+    interval: 5m
+    input_series:
+      - series: 'bitkv_space_amplification{instance="bitkv:9121"}'
+        values: "1 5 5 5 5 5 5 5 5"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: BitkvSpaceAmplificationHigh
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: BitkvSpaceAmplificationHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, instance: "bitkv:9121"}
+            exp_annotations:
+              summary: "bitkv disk is 5x larger than live data"
+              description: "Run a compaction before the volume fills."
+              runbook_url: https://github.com/HimanshAhuja/bitkv/blob/main/docs/runbooks/high-space-amplification.md
+
+  - name: error rate above 1% fires; healthy traffic does not
+    interval: 1m
+    input_series:
+      - series: 'bitkv_command_duration_seconds_count{instance="a"}'
+        values: "0+1000x20"
+      - series: 'bitkv_command_errors_total{instance="a"}'
+        values: "0+50x20"
+      - series: 'bitkv_command_duration_seconds_count{instance="b"}'
+        values: "0+1000x20"
+      - series: 'bitkv_command_errors_total{instance="b"}'
+        values: "0+1x20"
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: BitkvHighErrorRate
+        exp_alerts:
+          - exp_labels: {severity: warning, instance: a}
+            exp_annotations:
+              summary: "more than 1% of bitkv commands are failing"
+              runbook_url: https://github.com/HimanshAhuja/bitkv/blob/main/docs/runbooks/command-errors.md

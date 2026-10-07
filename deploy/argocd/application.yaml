@@ -1,0 +1,40 @@
+# GitOps: Argo CD keeps the cluster matching this Git repository.
+#
+#   kubectl apply -n argocd -f deploy/argocd/application.yaml
+#
+# From then on, a change ships by merging a commit that edits the chart or its
+# values; nobody runs `helm upgrade` or `kubectl apply` by hand. Rollback is a
+# `git revert`. selfHeal reverts manual edits made directly in the cluster, so
+# Git stays the single source of truth.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: bitkv
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/HimanshAhuja/bitkv.git
+    targetRevision: main
+    path: deploy/helm/bitkv
+    helm:
+      releaseName: bitkv
+      valueFiles:
+        - values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: bitkv
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m

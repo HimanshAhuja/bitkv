@@ -1,0 +1,32 @@
+- name: Install base packages
+  ansible.builtin.apt:
+    name: [build-essential, cmake, git, python3, ufw, chrony]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Harden SSH (no root login, keys only)
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?{{ item.key }}\\s"
+    line: "{{ item.key }} {{ item.value }}"
+    validate: /usr/sbin/sshd -t -f %s
+  loop:
+    - { key: PermitRootLogin, value: "no" }
+    - { key: PasswordAuthentication, value: "no" }
+    - { key: KbdInteractiveAuthentication, value: "no" }
+  notify: Restart ssh
+
+# Kernel settings for a storage server.
+- name: Tune kernel parameters
+  ansible.posix.sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/60-bitkv.conf
+    reload: true
+  loop:
+    # The keydir lives in RAM; swapping it out turns microsecond lookups into
+    # disk reads.
+    - { name: vm.swappiness, value: "1" }
+    # Matches the server's listen() backlog of 1024.
+    - { name: net.core.somaxconn, value: "1024" }

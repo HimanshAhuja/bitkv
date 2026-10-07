@@ -1,0 +1,32 @@
+# Host firewall: deny inbound by default, then open exactly three ports to
+# exactly the networks that need them. This is the host-level twin of the AWS
+# security group and the Kubernetes NetworkPolicy (defence in depth).
+#
+# SSH is allowed BEFORE the default-deny is enabled, or Ansible would cut off
+# its own connection.
+- name: Allow SSH from the admin network
+  community.general.ufw:
+    rule: allow
+    port: "22"
+    proto: tcp
+    src: "{{ admin_cidr }}"
+
+- name: Allow the bitkv data port from clients
+  community.general.ufw:
+    rule: allow
+    port: "{{ bitkv_port | default(6380) | string }}"
+    proto: tcp
+    src: "{{ client_cidr }}"
+
+- name: Allow metrics scrapes from monitoring
+  community.general.ufw:
+    rule: allow
+    port: "{{ bitkv_metrics_port | default(9121) | string }}"
+    proto: tcp
+    src: "{{ monitoring_cidr }}"
+
+- name: Default deny inbound, allow outbound, enable
+  community.general.ufw:
+    state: enabled
+    policy: deny
+    direction: incoming

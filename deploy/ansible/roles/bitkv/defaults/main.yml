@@ -1,0 +1,10 @@
+bitkv_version: main                       # git ref to build
+bitkv_repo: https://github.com/HimanshAhuja/bitkv.git
+bitkv_user: bitkv
+bitkv_home: /opt/bitkv
+bitkv_data_dir: /var/lib/bitkv
+bitkv_port: 6380
+bitkv_metrics_port: 9121
+bitkv_sync_mode: everysec                 # always | everysec | none
+bitkv_max_file_size: 67108864
+bitkv_manage_service: true                # false when testing without systemd

@@ -1,0 +1,76 @@
+# bitkv is a single-node store: exactly one replica owns the volume. The
+# chart refuses any other value (see templates/statefulset.yaml).
+replicaCount: 1
+
+image:
+  repository: ghcr.io/himanshahuja/bitkv
+  tag: ""                  # defaults to the chart's appVersion
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+server:
+  # always | everysec | none. See DESIGN.md section 5 before changing.
+  syncMode: everysec
+  maxFileSizeBytes: 67108864
+  port: 6380
+  metricsPort: 9121
+
+persistence:
+  enabled: true
+  size: 2Gi
+  storageClass: ""         # "" = cluster default StorageClass
+  accessModes: [ReadWriteOnce]
+
+# bitkv keeps every key in RAM. Size the memory limit for the keyspace:
+# roughly keys x (average key length + ~80 bytes of index overhead).
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+# The server fsyncs on SIGTERM; give it time before SIGKILL.
+terminationGracePeriodSeconds: 30
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 0
+  fsGroup: 0
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+service:
+  type: ClusterIP
+
+networkPolicy:
+  enabled: true
+  # Namespaces (by label) whose pods may connect to the data port.
+  clientNamespaceSelector:
+    matchLabels:
+      bitkv-access: "true"
+  # Namespace allowed to scrape /metrics.
+  monitoringNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: monitoring
+
+metrics:
+  # Adds prometheus.io/* annotations for annotation-based scraping.
+  podAnnotations: true
+  # Requires the Prometheus Operator CRDs.
+  serviceMonitor:
+    enabled: false
+    interval: 15s
+    labels: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

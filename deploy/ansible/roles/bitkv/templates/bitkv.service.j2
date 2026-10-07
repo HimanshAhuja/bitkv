@@ -1,0 +1,42 @@
+# Managed by Ansible; local edits will be overwritten.
+[Unit]
+Description=bitkv key-value store
+Documentation=https://github.com/HimanshAhuja/bitkv
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ bitkv_user }}
+Group={{ bitkv_user }}
+EnvironmentFile=/etc/default/bitkv
+ExecStart=/usr/local/bin/bitkv-server $BITKV_ARGS
+Restart=on-failure
+RestartSec=2s
+
+# On stop, systemd sends SIGTERM; the server fsyncs and exits. Only after
+# TimeoutStopSec does it escalate to SIGKILL.
+KillSignal=SIGTERM
+TimeoutStopSec=30s
+LimitNOFILE=65536
+
+# Sandboxing: the process can write only to its data directory, cannot gain
+# privileges, and sees no home directories or other users' temp files.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths={{ bitkv_data_dir }}
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

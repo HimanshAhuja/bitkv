@@ -1,0 +1,10 @@
+# Provision a host from bare Ubuntu to a running, verified bitkv.
+#   ansible-galaxy collection install -r requirements.yml
+#   ansible-playbook site.yml
+- name: Provision bitkv hosts
+  hosts: bitkv
+  become: true
+  roles:
+    - common
+    - firewall
+    - bitkv

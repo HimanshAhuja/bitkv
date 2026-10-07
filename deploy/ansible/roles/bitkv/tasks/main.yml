@@ -1,0 +1,97 @@
+- name: Create the service account
+  ansible.builtin.user:
+    name: "{{ bitkv_user }}"
+    system: true
+    shell: /usr/sbin/nologin
+    home: "{{ bitkv_home }}"
+    create_home: false
+
+- name: Create directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.owner }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ bitkv_home }}", owner: root, mode: "0755" }
+    - { path: "{{ bitkv_data_dir }}", owner: "{{ bitkv_user }}", mode: "0750" }
+    - { path: /var/backups, owner: root, mode: "0755" }
+
+- name: Fetch source at the requested version
+  ansible.builtin.git:
+    repo: "{{ bitkv_repo }}"
+    version: "{{ bitkv_version }}"
+    dest: "{{ bitkv_home }}/src"
+    force: true
+  register: bitkv_src
+  tags: [build]
+
+# Deliberately a conditional task, not a handler: if a handler-based build
+# failed, the git checkout would already count as done, and re-running the
+# playbook would never retry the build.
+- name: Build the server  # noqa: no-handler
+  ansible.builtin.shell:
+    cmd: >-
+      cmake -B build -DCMAKE_BUILD_TYPE=Release -DBITKV_BUILD_TESTS=OFF &&
+      cmake --build build -j --target bitkv-server
+    chdir: "{{ bitkv_home }}/src"
+  when: bitkv_src.changed  # rebuild only when the source actually changed
+  changed_when: true
+  tags: [build]
+
+- name: Install the binary
+  ansible.builtin.copy:
+    src: "{{ bitkv_home }}/src/build/bitkv-server"
+    dest: /usr/local/bin/bitkv-server
+    remote_src: true
+    mode: "0755"
+  notify: Restart bitkv
+  tags: [build]
+
+- name: Install the ops tools (backup, smoke test, doctor)
+  ansible.builtin.copy:
+    src: "{{ bitkv_home }}/src/ops/"
+    dest: "{{ bitkv_home }}/ops/"
+    remote_src: true
+    mode: "0755"
+  tags: [build]
+
+- name: Install the server configuration
+  ansible.builtin.template:
+    src: bitkv.env.j2
+    dest: /etc/default/bitkv
+    mode: "0644"
+  notify: Restart bitkv
+
+- name: Install the systemd unit
+  ansible.builtin.template:
+    src: bitkv.service.j2
+    dest: /etc/systemd/system/bitkv.service
+    mode: "0644"
+  notify: Restart bitkv
+
+- name: Enable and start bitkv
+  ansible.builtin.systemd:
+    name: bitkv
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: bitkv_manage_service | bool
+
+- name: Apply pending restarts now, before verifying
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for the data port
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ bitkv_port }}"
+    timeout: 120  # recovery replays every data file; large datasets take time
+
+- name: Smoke test (fails the play, and halts a rolling upgrade, on any error)
+  ansible.builtin.command:
+    cmd: >-
+      python3 {{ bitkv_home }}/ops/smoke_test.py
+      --addr 127.0.0.1:{{ bitkv_port }}
+      --metrics http://127.0.0.1:{{ bitkv_metrics_port }}
+  changed_when: false

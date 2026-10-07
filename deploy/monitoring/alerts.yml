@@ -1,0 +1,56 @@
+# Alert rules for bitkv. Every alert links to the runbook that resolves it.
+groups:
+  - name: bitkv
+    rules:
+      - alert: BitkvDown
+        expr: up{job="bitkv"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "bitkv {{ $labels.instance }} is down"
+          description: "Prometheus has failed to scrape {{ $labels.instance }} for 1 minute."
+          runbook_url: https://github.com/HimanshAhuja/bitkv/blob/main/docs/runbooks/server-unreachable.md
+
+      - alert: BitkvHighLatency
+        expr: |
+          histogram_quantile(0.99,
+            sum by (le, instance) (rate(bitkv_command_duration_seconds_bucket[5m]))
+          ) > 0.01
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "bitkv p99 latency above 10 ms on {{ $labels.instance }}"
+          description: "p99 command latency is {{ $value | humanizeDuration }}."
+          runbook_url: https://github.com/HimanshAhuja/bitkv/blob/main/docs/runbooks/high-latency.md
+
+      - alert: BitkvSpaceAmplificationHigh
+        expr: bitkv_space_amplification > 3
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "bitkv disk is {{ $value | humanize }}x larger than live data"
+          description: "Run a compaction before the volume fills."
+          runbook_url: https://github.com/HimanshAhuja/bitkv/blob/main/docs/runbooks/high-space-amplification.md
+
+      - alert: BitkvHighErrorRate
+        expr: |
+          rate(bitkv_command_errors_total[5m])
+            / rate(bitkv_command_duration_seconds_count[5m]) > 0.01
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "more than 1% of bitkv commands are failing"
+          runbook_url: https://github.com/HimanshAhuja/bitkv/blob/main/docs/runbooks/command-errors.md
+
+      - alert: BitkvUncleanShutdown
+        expr: bitkv_recovered_torn_bytes > 0
+        labels:
+          severity: info
+        annotations:
+          summary: "bitkv recovered from an unclean shutdown"
+          description: "Startup truncated {{ $value }} torn bytes. Find out why the last process died."
+          runbook_url: https://github.com/HimanshAhuja/bitkv/blob/main/docs/runbooks/unclean-shutdown.md

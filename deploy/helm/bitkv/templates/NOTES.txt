@@ -1,0 +1,18 @@
+bitkv is starting. Check it with:
+
+  kubectl -n {{ .Release.Namespace }} rollout status statefulset/{{ include "bitkv.fullname" . }}
+  helm test {{ .Release.Name }} -n {{ .Release.Namespace }}
+
+In-cluster address:
+  {{ include "bitkv.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.server.port }}
+
+{{- if .Values.networkPolicy.enabled }}
+
+A NetworkPolicy is active. Client pods must run in a namespace labelled:
+{{ toYaml .Values.networkPolicy.clientNamespaceSelector.matchLabels | indent 2 }}
+  e.g.  kubectl label namespace <your-app-namespace> bitkv-access=true
+{{- end }}
+
+From your machine:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "bitkv.fullname" . }} 6380 9121
+  redis-cli -p 6380 PING

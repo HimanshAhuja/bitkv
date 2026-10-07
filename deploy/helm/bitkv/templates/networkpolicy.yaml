@@ -1,0 +1,38 @@
+{{- if .Values.networkPolicy.enabled }}
+# Default-deny around the bitkv pod.
+#   ingress 6380 (data):    only from pods in namespaces matching
+#                           clientNamespaceSelector, plus this namespace
+#   ingress 9121 (metrics): only from the monitoring namespace, plus this
+#                           namespace (for helm test)
+#   egress:                 none. A storage engine has no reason to open
+#                           outbound connections; blocking them limits what an
+#                           attacker could do with a compromised pod.
+# Kubelet probes are not affected: they originate from the node.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "bitkv.fullname" . }}
+  labels:
+    {{- include "bitkv.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "bitkv.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.clientNamespaceSelector | nindent 12 }}
+        - podSelector: {}
+      ports:
+        - port: {{ .Values.server.port }}
+          protocol: TCP
+    - from:
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.monitoringNamespaceSelector | nindent 12 }}
+        - podSelector: {}
+      ports:
+        - port: {{ .Values.server.metricsPort }}
+          protocol: TCP
+  egress: []
+{{- end }}

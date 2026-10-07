@@ -1,0 +1,5 @@
+# Who may reach what. Tighten these to real CIDRs; 0.0.0.0/0 is never a
+# sensible value for admin_cidr.
+admin_cidr: 10.0.0.0/8          # SSH
+client_cidr: 10.0.0.0/8         # bitkv data port 6380
+monitoring_cidr: 10.0.0.0/8     # Prometheus scrapes 9121
