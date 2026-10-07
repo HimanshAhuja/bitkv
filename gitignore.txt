@@ -1,0 +1,15 @@
+build*/
+bitkv-data/
+bench-data/
+*.o
+compile_commands.json
+.vscode/
+.idea/
+.DS_Store
+# infrastructure
+deploy/terraform/.terraform/
+deploy/terraform/*.tfstate*
+deploy/terraform/terraform.tfvars
+deploy/ansible/inventory.ini
+**/__pycache__/
+*.tar.gz

@@ -1,0 +1,232 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # ---- the storage engine ---------------------------------------------------
+  engine:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitize: ["", address, thread]
+    name: engine (${{ matrix.sanitize || 'release' }})
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.sanitize && 'Debug' || 'RelWithDebInfo' }} \
+                -DBITKV_SANITIZE=${{ matrix.sanitize }}
+          cmake --build build -j
+      - name: Unit and model tests
+        run: ./build/bitkv_tests
+      - name: Crash harness (500 x kill -9)
+        if: matrix.sanitize == ''
+        run: ./build/crash_test 500
+
+  # ---- Go CLI ---------------------------------------------------------------
+  go:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: ctl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ctl/go.mod
+          cache: false
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - run: go vet ./...
+      - run: go test -race ./...
+
+  # ---- Python ops tools -----------------------------------------------------
+  python:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the server for integration tests
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DBITKV_BUILD_TESTS=OFF
+          cmake --build build -j --target bitkv-server
+      - name: Unit and integration tests
+        run: BITKV_SERVER=build/bitkv-server python3 -m unittest discover -s ops/tests -v
+
+  # ---- infrastructure as code ----------------------------------------------
+  iac-lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+      - name: Install kubeconform
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz
+          sudo mv kubeconform /usr/local/bin/
+      - name: Helm lint and schema-validate rendered manifests
+        run: |
+          helm lint --strict deploy/helm/bitkv
+          helm template bitkv deploy/helm/bitkv \
+            | kubeconform -strict -summary -kubernetes-version 1.30.0
+          # The chart must refuse to run two replicas on one volume.
+          ! helm template bitkv deploy/helm/bitkv --set replicaCount=2 2>/dev/null
+
+      - uses: hashicorp/setup-terraform@v3
+      - name: Terraform fmt and validate
+        working-directory: deploy/terraform
+        run: |
+          terraform fmt -check -recursive -diff
+          terraform init -backend=false -input=false
+          terraform validate
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Ansible lint
+        working-directory: deploy/ansible
+        run: |
+          python -m pip install --quiet ansible ansible-lint
+          cp inventory.example.ini inventory.ini
+          ansible-playbook site.yml upgrade.yml --syntax-check
+          ansible-lint --profile production site.yml upgrade.yml
+
+      - name: Prometheus rules and alert unit tests
+        working-directory: deploy/monitoring
+        run: |
+          curl -sSL https://github.com/prometheus/prometheus/releases/download/v2.53.0/prometheus-2.53.0.linux-amd64.tar.gz \
+            | tar xz --strip-components=1 prometheus-2.53.0.linux-amd64/promtool
+          ./promtool check rules alerts.yml
+          ./promtool test rules alerts_test.yml
+
+  # ---- container image ------------------------------------------------------
+  image:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Lowercase image name (GHCR requires it)
+        id: img
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/bitkv" >> "$GITHUB_OUTPUT"
+      - name: Log in to GHCR
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build (and push on main)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+          tags: |
+            ${{ steps.img.outputs.name }}:latest
+            ${{ steps.img.outputs.name }}:${{ github.sha }}
+
+  # ---- end to end on a real Kubernetes cluster -----------------------------
+  kubernetes-e2e:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t bitkv:ci .
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          version: v0.24.0       # kindnet enforces NetworkPolicy from v0.24
+          cluster_name: bitkv
+
+      - uses: azure/setup-helm@v4
+
+      - name: Deploy with Helm
+        run: |
+          kind load docker-image bitkv:ci --name bitkv
+          helm install bitkv deploy/helm/bitkv -n bitkv --create-namespace \
+            --set image.repository=bitkv --set image.tag=ci --set image.pullPolicy=Never \
+            --wait --timeout 3m
+          kubectl -n bitkv get pods,svc,pvc,networkpolicy -o wide
+
+      - name: helm test (connects through cluster DNS)
+        run: helm test bitkv -n bitkv --logs
+
+      - name: Smoke test and load through port-forward
+        run: |
+          kubectl -n bitkv port-forward svc/bitkv 6380 9121 >/dev/null 2>&1 &
+          PF=$!
+          sleep 3
+          python3 ops/smoke_test.py
+          python3 - <<'EOF'
+          import sys; sys.path.insert(0, "ops")
+          from bitkv_client import Client
+          with Client() as c:
+              for i in range(1, 501):
+                  c.do("SET", f"persist:{i}", f"v{i}")
+              print("wrote 500 keys; DBSIZE =", c.do("DBSIZE"))
+          EOF
+          kill "$PF" 2>/dev/null || true
+
+      - name: Data survives pod deletion (graceful, then forced)
+        run: |
+          check() {
+            kubectl -n bitkv wait pod/bitkv-0 --for=condition=Ready --timeout=120s
+            kubectl -n bitkv port-forward svc/bitkv 6380 9121 >/dev/null 2>&1 &
+            PF=$!
+            sleep 3
+            python3 - <<'EOF'
+          import sys; sys.path.insert(0, "ops")
+          from bitkv_client import Client
+          with Client() as c:
+              missing = [i for i in range(1, 501) if c.do("GET", f"persist:{i}") != f"v{i}"]
+          assert not missing, f"lost {len(missing)} keys"
+          print("all 500 keys survived")
+          EOF
+            kill "$PF" 2>/dev/null || true
+          }
+          kubectl -n bitkv delete pod bitkv-0
+          check
+          kubectl -n bitkv delete pod bitkv-0 --grace-period=0 --force
+          check
+
+      - name: NetworkPolicy blocks unauthorized namespaces
+        run: |
+          kubectl create namespace outsider
+          kubectl create namespace trusted
+          kubectl label namespace trusted bitkv-access=true
+          probe() {
+            kubectl -n "$1" run probe --image=bitkv:ci --image-pull-policy=Never --restart=Never \
+              --command -- bitkvctl --addr bitkv.bitkv.svc.cluster.local:6380 --timeout 3s ping
+            kubectl -n "$1" wait pod/probe --for=jsonpath='{.status.phase}'=Succeeded --timeout=30s
+          }
+          if probe outsider; then echo "FAIL: unauthorized namespace reached bitkv"; exit 1; fi
+          echo "outsider namespace blocked, as intended"
+          probe trusted
+          echo "trusted namespace allowed, as intended"
+
+      - name: bitkv-doctor against the cluster
+        run: |
+          kubectl -n bitkv port-forward svc/bitkv 6380 9121 >/dev/null 2>&1 &
+          PF=$!
+          sleep 3
+          rc=0
+          python3 ops/bitkv_doctor.py --k8s bitkv || rc=$?
+          kill "$PF" 2>/dev/null || true
+          exit "$rc"
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get all -A
+          kubectl -n bitkv describe pods
+          kubectl -n bitkv logs statefulset/bitkv --tail=100 || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -40
