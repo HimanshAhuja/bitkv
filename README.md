@@ -187,8 +187,6 @@ docs/               OPERATIONS.md and runbooks
 
 - [DESIGN.md](DESIGN.md): on-disk format, recovery, the merge commit protocol,
   locking, and known limitations.
-- [INTERVIEW.md](INTERVIEW.md): the design questions this project raises, and
-  exercises for extending it.
 - [docs/OPERATIONS.md](docs/OPERATIONS.md): deploying and running bitkv, the
   security model, and operations interview questions.
 - [docs/runbooks](docs/runbooks): on-call procedures.
