@@ -5,7 +5,8 @@ kind: Pod
 metadata:
   name: {{ include "bitkv.fullname" . }}-test
   labels:
-    {{- include "bitkv.labels" . | nindent 4 }}
+    app.kubernetes.io/name: {{ include "bitkv.name" . }}-test
+    app.kubernetes.io/instance: {{ .Release.Name }}
   annotations:
     helm.sh/hook: test
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
